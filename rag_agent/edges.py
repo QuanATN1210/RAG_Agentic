@@ -9,7 +9,7 @@ def route_after_rewrite(state: State) -> Literal["request_clarification", "agent
     else:
         return [
                 Send("agent", {"question": query, "question_index": idx, "messages": []})
-                for idx, query in enumerate(state["rewrittenQuestions"])
+                for idx, query in enumerate(state.get("rewrittenQuestions", []))
             ]
     
 def route_after_orchestrator_call(state: AgentState) -> Literal["tool", "fallback_response", "collect_answer"]:
