@@ -8,25 +8,50 @@ from utils import estimate_context_tokens
 from config import BASE_TOKEN_THRESHOLD, TOKEN_GROWTH_FACTOR
 
 def summarize_history(state: State, llm):
-    if len(state["messages"]) < 4:
+    messages = state.get("messages", [])
+    if len(messages) < 2:
         return {"conversation_summary": ""}
-    
+
+    # Keep the latest message (usually the newest user query) so rewrite_query can still read it.
+    recent_msgs = messages[-6:]
+    history_msgs = recent_msgs[:-1]
+
     relevant_msgs = [
-        msg for msg in state["messages"][:-1]
+        msg for msg in history_msgs
         if isinstance(msg, (HumanMessage, AIMessage)) and not getattr(msg, "tool_calls", None)
     ]
 
-    if not relevant_msgs:
-        return {"conversation_summary": ""}
-    
-    conversation = "Conversation history:\n"
-    for msg in relevant_msgs[-6:]:
+    prior_summary = state.get("conversation_summary", "").strip()
+    conversation = ""
+    if prior_summary:
+        conversation += f"[PRIOR SUMMARY]\n{prior_summary}\n\n"
+    conversation += "Conversation history:\n"
+
+    for msg in relevant_msgs:
         role = "User" if isinstance(msg, HumanMessage) else "Assistant"
         conversation += f"{role}: {msg.content}\n"
 
-    summary_response = llm.with_config(temperature=0.2).invoke([SystemMessage(content=get_conversation_summary_prompt()), HumanMessage(content=conversation)])
-    return {"conversation_summary": summary_response.content, "agent_answers": [{"__reset__": True}]}
+    summary_text = prior_summary
+    if relevant_msgs:
+        summary_response = llm.with_config(temperature=0.2).invoke([
+            SystemMessage(content=get_conversation_summary_prompt()),
+            HumanMessage(content=conversation),
+        ])
+        summary_text = summary_response.content
 
+    keep_ids = {m.id for m in recent_msgs if getattr(m, "id", None)}
+    remove_msgs = [
+        RemoveMessage(id=m.id)
+        for m in messages
+        if getattr(m, "id", None) and m.id not in keep_ids
+    ]
+
+    return {
+        "conversation_summary": summary_text,
+        "messages": remove_msgs,
+        "agent_answers": [{"__reset__": True}],
+    }
+    
 def rewrite_query(state: State, llm):
     last_message = state["messages"][-1]
     conversation_summary = state.get("conversation_summary", "")
@@ -37,8 +62,7 @@ def rewrite_query(state: State, llm):
     response = llm_with_structure.invoke([SystemMessage(content=get_rewrite_query_prompt()), HumanMessage(content=context_section)])
 
     if response.questions and response.is_clear:
-        delete_all = [RemoveMessage(id=m.id) for m in state["messages"] if not isinstance(m, SystemMessage)]
-        return {"questionIsClear": True, "messages": delete_all, "originalQuery": last_message.content, "rewrittenQuestions": response.questions}
+        return {"questionIsClear": True, "originalQuery": last_message.content, "rewrittenQuestions": response.questions, "agent_answers": [{"__reset__": True}]} # fix agent_answers reset on new question
 
     clarification = response.clarification_needed if response.clarification_needed and len(response.clarification_needed.strip()) > 10 else "I need more information to understand your question."
     return {"questionIsClear": False, "messages": [AIMessage(content=clarification)]}
