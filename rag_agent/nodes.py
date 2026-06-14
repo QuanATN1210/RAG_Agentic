@@ -83,8 +83,10 @@ def orchestrator(state: AgentState, llm_with_tools):
         force_search = HumanMessage(content="YOU MUST CALL 'search_child_chunks' AS THE FIRST STEP TO ANSWER THIS QUESTION.")
         response = llm_with_tools.invoke([sys_msg] + summary_injection + [human_msg, force_search])
         return {"messages": [human_msg, response], "tool_call_count": len(response.tool_calls or []), "iteration_count": 1}
-
-    response = llm_with_tools.invoke([sys_msg] + summary_injection + state["messages"])
+    if not summary_injection:
+        response = llm_with_tools.invoke([sys_msg] + state["messages"])
+        return {"messages": [response], "tool_call_count": len(response.tool_calls or []), "iteration_count": 1}
+    response = llm_with_tools.invoke([sys_msg] + summary_injection)
     tool_calls = response.tool_calls if hasattr(response, "tool_calls") else []
     return {"messages": [response], "tool_call_count": len(tool_calls) if tool_calls else 0, "iteration_count": 1}
 
